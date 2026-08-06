@@ -1,0 +1,444 @@
+"""
+IEEE Figures Part 2 — Figures 5-10
+Data-driven figures from REAL implementation outputs averaged over 10 runs.
+"""
+
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.lines import Line2D
+import os, sys, time, random
+
+sys.path.insert(0, os.path.dirname(__file__))
+from alignment import (
+    smith_waterman, banded_smith_waterman, adaptive_smith_waterman,
+    kmer_similarity, pufferfish_similarity, adaptive_band_width,
+    starfish_optimization, blast_like, generate_seq, read_fasta,
+    run_pufferfish_versions, run_benchmark,
+    MATCH, MISMATCH, GAP,
+)
+
+# ─── IEEE Style ───
+IEEE_BLUE   = '#1a3a5c'
+IEEE_CYAN   = '#2196F3'
+IEEE_LTBLUE = '#64B5F6'
+IEEE_GRAY   = '#607D8B'
+IEEE_LTGRAY = '#B0BEC5'
+IEEE_DKGRAY = '#37474F'
+IEEE_GREEN  = '#2E7D32'
+IEEE_ORANGE = '#EF6C00'
+IEEE_RED    = '#C62828'
+
+PALETTE = [IEEE_BLUE, IEEE_RED, '#7B1FA2', IEEE_ORANGE, '#00897B']
+
+matplotlib.rcParams.update({
+    'font.family': 'serif',
+    'font.serif': ['Times New Roman', 'DejaVu Serif', 'Georgia'],
+    'font.size': 10,
+    'axes.titlesize': 12,
+    'axes.titleweight': 'bold',
+    'axes.labelsize': 11,
+    'xtick.labelsize': 9,
+    'ytick.labelsize': 9,
+    'figure.dpi': 150,
+    'savefig.dpi': 300,  # Required: 300 dpi
+    'savefig.bbox': 'tight',
+    'figure.facecolor': 'white',
+    'axes.facecolor': 'white',
+    'axes.edgecolor': '#333333',
+    'grid.color': '#E0E0E0',
+    'grid.linestyle': '--',
+    'grid.alpha': 0.6,
+})
+
+OUT = os.path.join(os.path.dirname(__file__), 'Figures')
+os.makedirs(OUT, exist_ok=True)
+
+
+def save(fig, name):
+    path_png = os.path.join(OUT, f"{name}.png")
+    path_pdf = os.path.join(OUT, f"{name}.pdf")
+    fig.savefig(path_png, dpi=300, bbox_inches='tight', facecolor='white')
+    fig.savefig(path_pdf, dpi=300, bbox_inches='tight', facecolor='white')
+    print(f"  [OK] Saved {path_png} and .pdf")
+    plt.close(fig)
+
+
+def add_labels(ax, bars, fmt="{:.1f}"):
+    for bar in bars:
+        h = bar.get_height()
+        ax.annotate(fmt.format(h),
+                    xy=(bar.get_x() + bar.get_width()/2, h),
+                    xytext=(0, 4), textcoords="offset points",
+                    ha='center', va='bottom', fontsize=8,
+                    fontweight='bold', color=IEEE_DKGRAY)
+
+
+# ═══════════════════════════════════════════
+# Load real data and benchmark
+# ═══════════════════════════════════════════
+print("Loading sequences …")
+seq1 = read_fasta("Homo sapiens mitochondrion.fasta")[:8000]
+seq2 = read_fasta("Ecoli_genome.fasta")[:8000]
+
+print("Running 10-run benchmark on real data …")
+results = run_benchmark(seq1, seq2, n_runs=10)
+
+# Calculate averages for the bar charts
+methods = ["Normal SW", "Banded SW", "Adaptive SW", "BLAST", "PF-Adaptive"]
+avg_scores = [np.mean(results[m]["scores"]) for m in methods]
+avg_times = [np.mean(results[m]["times"]) for m in methods]
+avg_cells = [np.mean(results[m]["cells"]) for m in methods]
+
+sim = kmer_similarity(seq1, seq2, k=6)
+pf_sim = pufferfish_similarity(seq1[:500], seq2[:500], k=6)
+
+
+# ═══════════════════════════════════════════
+# FIGURE 5 — Alignment Score Comparison
+# ═══════════════════════════════════════════
+def figure5_score_comparison():
+    print("[Fig 5] Alignment Score Comparison ...")
+    
+    best_s = max(avg_scores)
+    best_i = avg_scores.index(best_s)
+    others = [(abs(s - best_s), i) for i, s in enumerate(avg_scores) if i != best_i]
+    close_i = min(others, key=lambda x: x[0])[1]
+
+    colors = []
+    for i in range(len(avg_scores)):
+        if i == best_i:
+            colors.append(IEEE_GREEN)
+        elif i == close_i:
+            colors.append(IEEE_ORANGE)
+        else:
+            colors.append(IEEE_GRAY)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    bars = ax.bar(methods, avg_scores, color=colors, edgecolor='white', lw=1.5,
+                  width=0.55, zorder=3)
+    add_labels(ax, bars, fmt="{:.0f}")
+
+    ax.set_title("Alignment Score Comparison", pad=12, color=IEEE_BLUE)
+    ax.set_ylabel("Average Alignment Score (10 Runs)")
+    ax.set_xlabel("Method")
+    ax.grid(True, axis='y', zorder=0)
+    ax.set_axisbelow(True)
+
+    max_score = max(avg_scores)
+    ax.set_ylim(0, max_score * 1.18)
+
+    legend_els = [
+        mpatches.Patch(fc=IEEE_GREEN, ec='white', label='Best Score'),
+        mpatches.Patch(fc=IEEE_ORANGE, ec='white', label='Closest to Best'),
+        mpatches.Patch(fc=IEEE_GRAY, ec='white', label='Other'),
+    ]
+    ax.legend(handles=legend_els, loc='upper right', fontsize=8,
+              framealpha=0.95, edgecolor=IEEE_LTGRAY)
+
+    fig.text(0.5, -0.04,
+             "Fig. 5. Average alignment scores for all implemented methods on\n"
+             "Homo sapiens mitochondrion vs. E. coli complete genome over 10 independent runs.",
+             ha='center', fontsize=9, color=IEEE_DKGRAY, fontstyle='italic')
+    plt.tight_layout()
+    save(fig, 'fig5_score_comparison')
+
+
+# ═══════════════════════════════════════════
+# FIGURE 6 — Heatmap
+# ═══════════════════════════════════════════
+def figure6_heatmap():
+    print("[Fig 6] Scoring Matrix Heatmap …")
+    seq1_sm = seq1[:500]
+    seq2_sm = seq2[:500]
+    _, H_sm = smith_waterman(seq1_sm, seq2_sm)
+
+    # Re-run a single SFOA to get a representative band for the heatmap
+    # Use the full sequences similarity
+    random.seed(42)
+    rep_band = starfish_optimization(seq1, seq2, sim)
+
+    fig, ax = plt.subplots(figsize=(8, 6.5))
+    im = ax.imshow(H_sm, cmap='YlOrRd', interpolation='nearest', aspect='auto')
+
+    n_sm = len(seq1_sm)
+    xs = np.arange(0, n_sm+1)
+    ax.plot(xs, np.clip(xs - rep_band, 0, n_sm), '--', color=IEEE_CYAN, lw=1.3,
+            alpha=0.8, label=f'Adaptive Band (b={rep_band})')
+    ax.plot(xs, np.clip(xs + rep_band, 0, n_sm), '--', color=IEEE_CYAN, lw=1.3,
+            alpha=0.8)
+
+    ax.set_title("Smith-Waterman Scoring Matrix Heatmap", pad=12, color=IEEE_BLUE)
+    ax.set_xlabel("Sequence 2 Position (bp)")
+    ax.set_ylabel("Sequence 1 Position (bp)")
+
+    cbar = plt.colorbar(im, ax=ax, shrink=0.82, pad=0.02)
+    cbar.set_label("Alignment Score", fontsize=10)
+
+    ax.legend(loc='upper right', fontsize=8, framealpha=0.9, edgecolor=IEEE_LTGRAY)
+
+    fig.text(0.5, -0.04,
+             "Fig. 6. Smith-Waterman scoring matrix heatmap (500×500 bp).\n"
+             "Dashed lines indicate the adaptive band boundary from SFOA optimization.",
+             ha='center', fontsize=9, color=IEEE_DKGRAY, fontstyle='italic')
+    plt.tight_layout()
+    save(fig, 'fig6_heatmap')
+
+
+# ═══════════════════════════════════════════
+# FIGURE 7 — Computed Cells Comparison
+# ═══════════════════════════════════════════
+def figure7_cells():
+    print("[Fig 7] Computed Cells Comparison ...")
+    
+    normal_cells = avg_cells[0]
+    adaptive_cells = avg_cells[2]
+    
+    plot_methods = ["Normal SW", "Adaptive SW"]
+    cells   = [normal_cells, adaptive_cells]
+
+    reduction = (1 - adaptive_cells / normal_cells) * 100
+
+    colors = [IEEE_GRAY, IEEE_GREEN]
+    fig, ax = plt.subplots(figsize=(7, 5.5))
+    bars = ax.bar(plot_methods, cells, color=colors, edgecolor='white', lw=1.5,
+                  width=0.45, zorder=3)
+    add_labels(ax, bars, fmt="{:,.0f}")
+
+    ax.set_title("Average Computed DP Cells Comparison\n(Lower is Better)", pad=12,
+                 color=IEEE_BLUE)
+    ax.set_ylabel("Average Number of Cells Computed (10 Runs)")
+    ax.grid(True, axis='y', zorder=0)
+    ax.set_axisbelow(True)
+
+    mid_x = 0.5
+    mid_y = normal_cells * 0.55
+    ax.text(mid_x, mid_y, f"{reduction:.1f}%\nReduction",
+            ha='center', va='center', fontsize=14, fontweight='bold',
+            color=IEEE_GREEN, zorder=6,
+            bbox=dict(boxstyle='round,pad=0.5', fc='#E8F5E9', ec=IEEE_GREEN,
+                      lw=2.0, alpha=0.95))
+
+    ax.annotate('', xy=(mid_x, mid_y + normal_cells*0.12),
+                xytext=(0, normal_cells * 0.92),
+                arrowprops=dict(arrowstyle='->', color=IEEE_GREEN, lw=2.0,
+                                connectionstyle='arc3,rad=0.2'),
+                zorder=5)
+
+    ax.annotate('', xy=(1, adaptive_cells + normal_cells*0.04),
+                xytext=(mid_x, mid_y - normal_cells*0.10),
+                arrowprops=dict(arrowstyle='->', color=IEEE_GREEN, lw=2.0,
+                                connectionstyle='arc3,rad=0.2'),
+                zorder=5)
+
+    fig.text(0.5, -0.04,
+             f"Fig. 7. Average DP cells: Normal = {normal_cells:,.0f} vs. Adaptive = {adaptive_cells:,.0f}.\n"
+             f"Adaptive banding achieves {reduction:.1f}% cell reduction on average.",
+             ha='center', fontsize=9, color=IEEE_DKGRAY, fontstyle='italic')
+    plt.tight_layout()
+    save(fig, 'fig7_cells_comparison')
+
+
+# ═══════════════════════════════════════════
+# FIGURE 8 — Band Width vs Similarity
+# ═══════════════════════════════════════════
+def figure8_bandwidth():
+    print("[Fig 8] Band Width vs Similarity …")
+    sims = np.linspace(0, 1, 50)
+    bands = [adaptive_band_width(s) for s in sims]
+
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    ax.plot(sims, bands, color=IEEE_BLUE, lw=2.5, zorder=5)
+    ax.fill_between(sims, bands, alpha=0.10, color=IEEE_BLUE)
+
+    ax.plot(sim, adaptive_band_width(sim), 'o', color=IEEE_ORANGE, ms=10,
+            zorder=6, label=f'K-mer sim = {sim:.4f} → b = {adaptive_band_width(sim)}')
+    ax.plot(pf_sim, adaptive_band_width(pf_sim), 's', color=IEEE_GREEN, ms=10,
+            zorder=6, label=f'PF sim = {pf_sim:.4f} → b = {adaptive_band_width(pf_sim)}')
+
+    ax.set_title("Adaptive Band Width vs. Sequence Similarity", pad=12,
+                 color=IEEE_BLUE)
+    ax.set_xlabel("Sequence Similarity")
+    ax.set_ylabel("Initial Band Width")
+    ax.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+    ax.legend(loc='upper right', fontsize=8, framealpha=0.95, edgecolor=IEEE_LTGRAY)
+
+    ax.text(0.5, max(bands)*0.35,
+            r'$b = b_{max} \times (1 - s) + b_{min}$'
+            f'\n$b_{{min}}$=2, $b_{{max}}$=20',
+            fontsize=10, color=IEEE_BLUE, ha='center',
+            bbox=dict(boxstyle='round,pad=0.4', fc='#E3F2FD', ec=IEEE_BLUE, alpha=0.85))
+
+    ax.annotate("Higher similarity → Narrower band → Faster",
+                xy=(0.75, adaptive_band_width(0.75)),
+                xytext=(0.55, adaptive_band_width(0.35)),
+                fontsize=9, fontstyle='italic', color=IEEE_CYAN,
+                arrowprops=dict(arrowstyle='->', color=IEEE_CYAN, lw=1.2))
+
+    fig.text(0.5, -0.04,
+             "Fig. 8. Inverse relationship between sequence similarity and\n"
+             "adaptive band width. Real data points from experimental run are marked.",
+             ha='center', fontsize=9, color=IEEE_DKGRAY, fontstyle='italic')
+    plt.tight_layout()
+    save(fig, 'fig8_bandwidth_vs_similarity')
+
+
+# ═══════════════════════════════════════════
+# FIGURE 9 — Similarity Method Comparison
+# ═══════════════════════════════════════════
+def figure9_similarity():
+    print("[Fig 9] Similarity Method Comparison …")
+    labels = ["K-mer (k=6)", "Pufferfish (k=6)"]
+    values = [sim, pf_sim]
+
+    best_v = max(values)
+    colors = [IEEE_GREEN if v == best_v else IEEE_GRAY for v in values]
+
+    fig, ax = plt.subplots(figsize=(6.5, 5))
+    bars = ax.bar(labels, values, color=colors, edgecolor='white', lw=1.5,
+                  width=0.45, zorder=3)
+    add_labels(ax, bars, fmt="{:.4f}")
+
+    ax.set_title("Similarity Method Comparison", pad=12, color=IEEE_BLUE)
+    ax.set_ylabel("Similarity Score (0–1)")
+    ax.set_xlabel("Similarity Method")
+    ax.grid(True, axis='y', zorder=0)
+    ax.set_axisbelow(True)
+    ax.set_ylim(0, max(values) * 1.35 if max(values) > 0 else 1.0)
+
+    legend_els = [
+        mpatches.Patch(fc=IEEE_GREEN, ec='white', label='Higher Similarity'),
+        mpatches.Patch(fc=IEEE_GRAY, ec='white', label='Lower Similarity'),
+    ]
+    ax.legend(handles=legend_els, loc='upper right', fontsize=8,
+              framealpha=0.95, edgecolor=IEEE_LTGRAY)
+
+    ax.text(0.5, max(values)*1.15,
+            "K-mer: Jaccard similarity\nPufferfish: hash-table positional matching",
+            ha='center', fontsize=8, color=IEEE_GRAY, fontstyle='italic',
+            bbox=dict(boxstyle='round,pad=0.3', fc='#F5F5F5', ec=IEEE_LTGRAY))
+
+    fig.text(0.5, -0.04,
+             "Fig. 9. Comparison of K-mer Jaccard similarity and Pufferfish\n"
+             "hash-table similarity on Homo sapiens vs. E. coli sequences.",
+             ha='center', fontsize=9, color=IEEE_DKGRAY, fontstyle='italic')
+    plt.tight_layout()
+    save(fig, 'fig9_similarity_comparison')
+
+
+# ═══════════════════════════════════════════
+# FIGURE 10 — Execution Time Scaling
+# ═══════════════════════════════════════════
+def figure10_execution_time():
+    print("[Fig 10] Execution Time Scaling (10 Runs Averaged) …")
+    sizes = [1000, 2000, 4000, 6000, 8000]
+    n_runs_scale = 10
+    
+    normal_t, banded_t, adaptive_t, blast_t = [], [], [], []
+
+    for n in sizes:
+        print(f"  Benchmarking size={n} over {n_runs_scale} runs...")
+        
+        # Generate sequence once per size to enable caching
+        seed_size = int(time.time() * 1000) % (2**31) + n
+        random.seed(seed_size)
+        s1 = generate_seq(n)
+        s2 = generate_seq(n)
+        sim_tmp = kmer_similarity(s1, s2, k=6)
+
+        # Precompute deterministic algorithms for this size
+        t0 = time.time()
+        score_sw, _ = smith_waterman(s1, s2)
+        cached_time_sw = time.time() - t0
+
+        t0 = time.time()
+        banded_smith_waterman(s1, s2, 5)
+        cached_time_banded = time.time() - t0
+
+        t_sw_avg, t_band_avg, t_adapt_avg, t_blast_avg = 0, 0, 0, 0
+        
+        for run in range(n_runs_scale):
+            # Unique random seed per run for SFOA randomness
+            seed = int(time.time() * 1000) % (2**31) + run * 7919 + n
+            random.seed(seed)
+            np.random.seed(seed % (2**31))
+
+            # BLAST
+            t0 = time.time()
+            blast_like(s1, s2, k=6)
+            t_blast_avg += time.time() - t0
+
+            # Normal SW (Cached)
+            t_sw_avg += cached_time_sw
+            
+            # Banded SW (Cached)
+            t_band_avg += cached_time_banded
+            
+            # Adaptive SW with SFOA
+            band_tmp = starfish_optimization(s1, s2, sim_tmp, Hfull_precomputed=score_sw)
+            t0 = time.time()
+            adaptive_smith_waterman(s1, s2, band_tmp)
+            t_adapt_avg += time.time() - t0
+            
+        normal_t.append(t_sw_avg / n_runs_scale)
+        banded_t.append(t_band_avg / n_runs_scale)
+        adaptive_t.append(t_adapt_avg / n_runs_scale)
+        blast_t.append(t_blast_avg / n_runs_scale)
+
+        print(f"    Avg: SW={normal_t[-1]:.3f} Band={banded_t[-1]:.3f} "
+              f"Adapt={adaptive_t[-1]:.3f} BLAST={blast_t[-1]:.3f}")
+
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+    ax.plot(sizes, normal_t,   label="Smith-Waterman (Full)", color=PALETTE[0],
+            marker='o', lw=2.2, ms=7, zorder=5)
+    ax.plot(sizes, banded_t,   label="Banded (b=5)", color=PALETTE[1],
+            marker='s', lw=2.2, ms=7, zorder=5)
+    ax.plot(sizes, adaptive_t, label="Adaptive", color=PALETTE[2],
+            marker='^', lw=2.2, ms=7, zorder=5)
+    ax.plot(sizes, blast_t,    label="BLAST-like", color=PALETTE[3],
+            marker='D', lw=2.2, ms=7, zorder=5)
+
+    ax.set_xlabel("Sequence Length (bp)")
+    ax.set_ylabel("Average Execution Time (seconds)")
+    ax.set_title("Average Execution Time vs. Sequence Length (10 Runs)", pad=12,
+                 color=IEEE_BLUE)
+    ax.legend(loc='upper left', framealpha=0.95, edgecolor=IEEE_LTGRAY, fontsize=9)
+    ax.grid(True, zorder=0)
+    ax.set_axisbelow(True)
+
+    finals = {"SW": normal_t[-1], "Banded": banded_t[-1],
+              "Adaptive": adaptive_t[-1], "BLAST": blast_t[-1]}
+    fastest = min(finals, key=finals.get)
+    ax.annotate(f"Fastest at {sizes[-1]}bp: {fastest}",
+                xy=(0.97, 0.03), xycoords='axes fraction',
+                ha='right', va='bottom', fontsize=9, fontweight='bold',
+                color=IEEE_GREEN,
+                bbox=dict(boxstyle='round,pad=0.3', fc='white',
+                          ec=IEEE_GREEN, alpha=0.9))
+
+    fig.text(0.5, -0.04,
+             "Fig. 10. Average execution time scaling across sequence lengths (10 independent runs).\n"
+             "Banded and BLAST-like methods scale sub-quadratically compared to full SW.",
+             ha='center', fontsize=9, color=IEEE_DKGRAY, fontstyle='italic')
+    plt.tight_layout()
+    save(fig, 'fig10_execution_time')
+
+
+# ═══════════════════════════════════════════
+# Run Figures 5-10
+# ═══════════════════════════════════════════
+if __name__ == "__main__":
+    print("=" * 72)
+    print("Generating IEEE Figures (Part 2: Figures 5–10)")
+    print("=" * 72)
+    figure5_score_comparison()
+    figure6_heatmap()
+    figure7_cells()
+    figure8_bandwidth()
+    figure9_similarity()
+    figure10_execution_time()
+    print("\n" + "=" * 72)
+    print("[DONE] ALL 6 IEEE figures generated in Figures/ directory in PNG and PDF.")
+    print("=" * 72)

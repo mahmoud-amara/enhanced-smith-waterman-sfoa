@@ -1,0 +1,506 @@
+"""
+IEEE Publication-Quality Figure Generator
+==========================================
+Paper: "An Enhanced Smith-Waterman Algorithm Using Adaptive Banding
+        and Aware Gap Penalty Optimized by Starfish Optimization"
+
+All figures are derived directly from the real alignment.py implementation.
+"""
+
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import matplotlib.patheffects as pe
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, ArrowStyle
+from matplotlib.lines import Line2D
+import os, sys, time, random, math
+
+# ---------- import project code ----------
+sys.path.insert(0, os.path.dirname(__file__))
+from alignment import (
+    smith_waterman, banded_smith_waterman, adaptive_smith_waterman,
+    kmer_similarity, pufferfish_similarity, adaptive_band_width,
+    starfish_band_search, blast_like, generate_seq, read_fasta,
+    run_pufferfish_versions, precompute_mutation_density,
+    dynamic_gap_penalty,
+    MATCH, MISMATCH, GAP, GAP_CONSERVED, GAP_VARIABLE,
+)
+
+# ═══════════════════════════════════════════
+# IEEE Style Configuration
+# ═══════════════════════════════════════════
+IEEE_BLUE   = '#1a3a5c'
+IEEE_CYAN   = '#2196F3'
+IEEE_LTBLUE = '#64B5F6'
+IEEE_GRAY   = '#607D8B'
+IEEE_LTGRAY = '#B0BEC5'
+IEEE_DKGRAY = '#37474F'
+IEEE_WHITE  = '#FFFFFF'
+IEEE_BG     = '#FAFAFA'
+IEEE_ACC    = '#00ACC1'
+IEEE_GREEN  = '#2E7D32'
+IEEE_ORANGE = '#EF6C00'
+IEEE_RED    = '#C62828'
+
+matplotlib.rcParams.update({
+    'font.family': 'serif',
+    'font.serif': ['Times New Roman', 'DejaVu Serif', 'Georgia'],
+    'font.size': 10,
+    'axes.titlesize': 12,
+    'axes.titleweight': 'bold',
+    'axes.labelsize': 11,
+    'xtick.labelsize': 9,
+    'ytick.labelsize': 9,
+    'figure.dpi': 150,
+    'savefig.dpi': 600,
+    'savefig.bbox': 'tight',
+    'figure.facecolor': 'white',
+    'axes.facecolor': 'white',
+    'axes.edgecolor': '#333333',
+    'grid.color': '#E0E0E0',
+    'grid.linestyle': '--',
+    'grid.alpha': 0.6,
+    'text.usetex': False,
+})
+
+OUT = os.path.join(os.path.dirname(__file__), 'Figures')
+os.makedirs(OUT, exist_ok=True)
+
+
+def save(fig, name):
+    path = os.path.join(OUT, name)
+    fig.savefig(path, dpi=600, bbox_inches='tight', facecolor='white')
+    print(f"  [OK] Saved {path}")
+    plt.close(fig)
+
+
+# helper: rounded box
+def rbox(ax, x, y, w, h, text, fc=IEEE_LTBLUE, ec=IEEE_BLUE,
+         fontsize=8, txt_color='white', lw=1.2, zorder=3):
+    box = FancyBboxPatch((x, y), w, h,
+                         boxstyle="round,pad=0.12", linewidth=lw,
+                         edgecolor=ec, facecolor=fc, zorder=zorder,
+                         transform=ax.transData)
+    ax.add_patch(box)
+    ax.text(x + w/2, y + h/2, text, ha='center', va='center',
+            fontsize=fontsize, fontweight='bold', color=txt_color,
+            zorder=zorder+1, transform=ax.transData)
+    return box
+
+
+def arrow_h(ax, x1, y, x2, color=IEEE_BLUE, lw=1.5):
+    ax.annotate('', xy=(x2, y), xytext=(x1, y),
+                arrowprops=dict(arrowstyle='->', color=color, lw=lw),
+                zorder=2)
+
+
+def arrow_v(ax, x, y1, y2, color=IEEE_BLUE, lw=1.5):
+    ax.annotate('', xy=(x, y2), xytext=(x, y1),
+                arrowprops=dict(arrowstyle='->', color=color, lw=lw),
+                zorder=2)
+
+
+# ═══════════════════════════════════════════
+# FIGURE 1 — Full Framework Architecture
+# ═══════════════════════════════════════════
+def figure1_architecture():
+    print("[Fig 1] Full Framework Architecture (Redesign) ...")
+    # Vertical layout for better paper fit and clarity
+    fig, ax = plt.subplots(figsize=(8, 11))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 18)
+    ax.axis('off')
+
+    # Styles
+    block_w, block_h = 5.0, 1.0
+    center_x = 5.0
+    start_y = 16.5
+    v_gap = 1.6
+
+    stages = [
+        "Input DNA Sequences",
+        "K-mer Similarity Estimation",
+        "Initial Adaptive Band Estimation",
+        "Starfish Optimization (SFOA)",
+        "Adaptive Band Refinement",
+        "Context-Aware Gap Penalty",
+        "Adaptive Smith-Waterman Alignment",
+        "Final Alignment Output"
+    ]
+
+    # Colors: soft blue, gray, black text, subtle cyan
+    colors = [
+        '#ECEFF1', # Gray for input
+        '#E3F2FD', # Soft Blue
+        '#E0F7FA', # Subtle Cyan
+        '#B3E5FC', # Stronger Blue for core
+        '#E0F7FA',
+        '#E0F7FA',
+        '#E3F2FD',
+        '#C8E6C9'  # Success Green
+    ]
+
+    edge_colors = [IEEE_GRAY, IEEE_BLUE, IEEE_ACC, IEEE_BLUE, IEEE_ACC, IEEE_ACC, IEEE_BLUE, IEEE_GREEN]
+
+    y_coords = []
+    for i, (stage, fc, ec) in enumerate(zip(stages, colors, edge_colors)):
+        curr_y = start_y - i * v_gap
+        y_coords.append(curr_y)
+
+        # Draw block
+        rbox(ax, center_x - block_w/2, curr_y - block_h/2, block_w, block_h,
+             stage, fc=fc, ec=ec, txt_color='black', fontsize=9, lw=1.0)
+
+        # Draw connecting arrow
+        if i > 0:
+            prev_y = y_coords[i-1]
+            ax.annotate('', xy=(center_x, curr_y + block_h/2 + 0.05),
+                        xytext=(center_x, prev_y - block_h/2 - 0.05),
+                        arrowprops=dict(arrowstyle='-|>', color=IEEE_DKGRAY,
+                                        lw=1.2, mutation_scale=15),
+                        zorder=2)
+
+    # --- Side Annotations (Scientific Detail) ---
+    # Optimization detail near SFOA
+    ax.text(center_x - block_w/2 - 0.4, y_coords[3],
+            "delta in [-8, +8]\nPopulation-based",
+            ha='right', va='center', fontsize=8, color=IEEE_GRAY, fontstyle='italic')
+
+    # DP Matrix Icon near SW
+    # Simple 3x3 grid sketch
+    ix, iy = center_x + block_w/2 + 0.5, y_coords[6] - 0.3
+    for row in range(3):
+        for col in range(3):
+            ax.add_patch(plt.Rectangle((ix+col*0.2, iy+row*0.2), 0.18, 0.18,
+                                       fc='white', ec=IEEE_LTGRAY, lw=0.5))
+    ax.text(ix + 0.3, iy + 0.7, "H[i,j] Matrix", ha='center', fontsize=7, color=IEEE_GRAY)
+
+    # --- Header and Footer ---
+    ax.text(center_x, 17.6, "PROPOSED BIOINFORMATICS FRAMEWORK PIPELINE",
+            ha='center', fontsize=12, fontweight='bold', color=IEEE_BLUE)
+
+    fig.text(0.5, 0.05,
+             "Fig. 1. Hierarchical architecture of the enhanced Smith-Waterman framework.\n"
+             "The system integrates K-mer similarity, Pufferfish indexing, and SFOA for optimized alignment.",
+             ha='center', fontsize=10, color=IEEE_DKGRAY, fontstyle='italic')
+
+    save(fig, 'fig1_framework_architecture.png')
+
+
+
+# ═══════════════════════════════════════════
+# FIGURE 2 — Traditional Smith-Waterman
+# ═══════════════════════════════════════════
+def figure2_traditional_sw():
+    print("[Fig 2] Traditional Smith-Waterman …")
+    fig, ax = plt.subplots(figsize=(7, 6))
+
+    n, m = 20, 20
+    # Draw full DP grid
+    for i in range(n+1):
+        for j in range(m+1):
+            rect = plt.Rectangle((j, n-i), 1, 1, linewidth=0.4,
+                                 edgecolor=IEEE_LTGRAY, facecolor='#E3F2FD',
+                                 zorder=1)
+            ax.add_patch(rect)
+
+    # Traceback path (diagonal)
+    tb = [(1,1),(2,2),(3,3),(4,4),(5,4),(6,5),(7,6),(8,7),(9,8),
+          (10,9),(11,10),(12,11),(13,12),(14,13),(15,14),(16,15),
+          (17,16),(18,17),(19,18),(20,19)]
+    for i, j in tb:
+        rect = plt.Rectangle((j, n-i), 1, 1, linewidth=0.4,
+                              edgecolor=IEEE_BLUE, facecolor=IEEE_CYAN,
+                              alpha=0.7, zorder=2)
+        ax.add_patch(rect)
+
+    ax.set_xlim(0, m+1)
+    ax.set_ylim(0, n+1)
+    ax.set_aspect('equal')
+    ax.set_xlabel('Sequence 2 (m)', fontsize=11, color=IEEE_BLUE)
+    ax.set_ylabel('Sequence 1 (n)', fontsize=11, color=IEEE_BLUE)
+    ax.set_title('Traditional Smith-Waterman Algorithm', fontsize=13,
+                 fontweight='bold', color=IEEE_BLUE, pad=12)
+
+    # Complexity label
+    ax.text(m/2+0.5, -1.0, r'$\mathcal{O}(n \times m)$ Complexity',
+            ha='center', fontsize=12, fontweight='bold', color=IEEE_RED,
+            bbox=dict(boxstyle='round,pad=0.3', fc='#FFEBEE', ec=IEEE_RED, alpha=0.9))
+
+    # Annotations
+    ax.text(m+0.5, n+0.5, 'Full Matrix\nComputation',
+            ha='center', fontsize=9, color=IEEE_GRAY, fontstyle='italic')
+    ax.text(m+0.5, n/2, f'Fixed Gap = {GAP}',
+            ha='center', fontsize=8, color=IEEE_DKGRAY,
+            bbox=dict(boxstyle='round,pad=0.2', fc='#F5F5F5', ec=IEEE_LTGRAY))
+
+    # Legend
+    legend_els = [
+        mpatches.Patch(facecolor='#E3F2FD', edgecolor=IEEE_LTGRAY, label='DP Cells (all computed)'),
+        mpatches.Patch(facecolor=IEEE_CYAN, edgecolor=IEEE_BLUE, label='Traceback Path'),
+    ]
+    ax.legend(handles=legend_els, loc='upper right', fontsize=8,
+              framealpha=0.95, edgecolor=IEEE_LTGRAY)
+
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    # Caption
+    fig.text(0.5, -0.02,
+             "Fig. 2. Traditional Smith-Waterman: all n×m cells are computed.\n"
+             f"Match={MATCH}, Mismatch={MISMATCH}, Gap={GAP}.",
+             ha='center', fontsize=9, color=IEEE_DKGRAY, fontstyle='italic')
+
+    save(fig, 'fig2_traditional_sw.png')
+
+
+# ═══════════════════════════════════════════
+# FIGURE 3 — SW + Adaptive Banding
+# ═══════════════════════════════════════════
+def figure3_adaptive_banding():
+    print("[Fig 3] SW + Adaptive Banding …")
+    fig, ax = plt.subplots(figsize=(7, 6))
+
+    n = 20
+    band = 4  # visual band width
+
+    for i in range(n+1):
+        for j in range(n+1):
+            in_band = abs(i - j) <= band
+            if in_band:
+                rect = plt.Rectangle((j, n-i), 1, 1, linewidth=0.4,
+                                     edgecolor=IEEE_BLUE, facecolor='#B3E5FC',
+                                     zorder=2)
+            else:
+                rect = plt.Rectangle((j, n-i), 1, 1, linewidth=0.3,
+                                     edgecolor='#E0E0E0', facecolor='#F5F5F5',
+                                     alpha=0.5, zorder=1)
+            ax.add_patch(rect)
+
+    # Band boundary lines
+    xs = np.linspace(0, n+1, 100)
+    ax.plot(xs, [n+1 - (x - band) for x in xs], '--', color=IEEE_ORANGE,
+            lw=1.5, zorder=3, label='Band Boundary')
+    ax.plot(xs, [n+1 - (x + band) for x in xs], '--', color=IEEE_ORANGE,
+            lw=1.5, zorder=3)
+
+    ax.set_xlim(0, n+1)
+    ax.set_ylim(0, n+1)
+    ax.set_aspect('equal')
+    ax.set_xlabel('Sequence 2', fontsize=11, color=IEEE_BLUE)
+    ax.set_ylabel('Sequence 1', fontsize=11, color=IEEE_BLUE)
+    ax.set_title('Smith-Waterman with Adaptive Banding', fontsize=13,
+                 fontweight='bold', color=IEEE_BLUE, pad=12)
+
+    # Annotations
+    ax.annotate('Reduced Search\nSpace', xy=(15, 15), fontsize=9,
+                fontweight='bold', color=IEEE_GREEN, ha='center',
+                bbox=dict(boxstyle='round,pad=0.3', fc='#E8F5E9', ec=IEEE_GREEN))
+
+    ax.text(3, 18, r'$\mathcal{O}(n \times b)$ Complexity',
+            fontsize=11, fontweight='bold', color=IEEE_CYAN,
+            bbox=dict(boxstyle='round,pad=0.3', fc='white', ec=IEEE_CYAN))
+
+    ax.text(16, 3, 'Adaptive\nCorridor', fontsize=9, color=IEEE_ORANGE,
+            ha='center', fontstyle='italic', fontweight='bold')
+
+    # Legend
+    legend_els = [
+        mpatches.Patch(facecolor='#B3E5FC', edgecolor=IEEE_BLUE, label='Active Band Cells'),
+        mpatches.Patch(facecolor='#F5F5F5', edgecolor='#E0E0E0', label='Skipped Cells'),
+        Line2D([0],[0], color=IEEE_ORANGE, ls='--', lw=1.5, label='Band Boundary'),
+    ]
+    ax.legend(handles=legend_els, loc='upper right', fontsize=8,
+              framealpha=0.95, edgecolor=IEEE_LTGRAY)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    # band formula
+    ax.text(n/2+0.5, -1.2,
+            r'$b = b_{max} \times (1 - similarity) + b_{min}$',
+            ha='center', fontsize=10, color=IEEE_BLUE,
+            bbox=dict(boxstyle='round,pad=0.3', fc='#E3F2FD', ec=IEEE_BLUE))
+
+    fig.text(0.5, -0.05,
+             "Fig. 3. Adaptive banding restricts computation to a diagonal corridor.\n"
+             "Band width adapts inversely to sequence similarity.",
+             ha='center', fontsize=9, color=IEEE_DKGRAY, fontstyle='italic')
+
+    save(fig, 'fig3_adaptive_banding.png')
+
+
+# ═══════════════════════════════════════════
+# FIGURE 4 — Starfish Optimization (SFOA)
+# ═══════════════════════════════════════════
+def figure4_sfoa():
+    print("[Fig 4] Starfish Optimization (SFOA) Redesign ...")
+    fig, ax = plt.subplots(figsize=(9, 10))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 14)
+    ax.axis('off')
+
+    # Full White Background (explicit)
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('white')
+
+    # Structure
+    center_x = 5.0
+    start_y = 12.5
+    v_gap = 1.8
+    bw, bh = 4.2, 1.1
+
+    steps = [
+        "Population Initialization\n(Seed bands from similarity)",
+        "Exploration Phase\n(Global search in delta range)",
+        "Exploitation Phase\n(Local refinement of band)",
+        "Regeneration / Refinement\n(Update population positions)",
+        "Fitness Evaluation\n(Score vs. Complexity)",
+        "Optimal Band Selection\n(Select max fitness)"
+    ]
+
+    colors = ['#F5F5F5', '#E3F2FD', '#E3F2FD', '#E0F7FA', '#FFF3E0', '#C8E6C9']
+    edges  = [IEEE_GRAY, IEEE_BLUE, IEEE_BLUE, IEEE_ACC, IEEE_ORANGE, IEEE_GREEN]
+
+    y_coords = []
+    for i, (step, fc, ec) in enumerate(zip(steps, colors, edges)):
+        curr_y = start_y - i * v_gap
+        y_coords.append(curr_y)
+
+        # Block
+        rbox(ax, center_x - bw/2, curr_y - bh/2, bw, bh,
+             step, fc=fc, ec=ec, txt_color='black', fontsize=9.5, lw=1.0)
+
+        # Connector
+        if i > 0:
+            ax.annotate('', xy=(center_x, curr_y + bh/2 + 0.05),
+                        xytext=(center_x, y_coords[i-1] - bh/2 - 0.05),
+                        arrowprops=dict(arrowstyle='-|>', color=IEEE_DKGRAY,
+                                        lw=1.2, mutation_scale=15))
+
+    # --- Optimization Loop Connection ---
+    # Arrow from Optimal Selection back to Exploitation
+    ax.annotate('', xy=(center_x + bw/2 + 0.1, y_coords[2]),
+                xytext=(center_x + bw/2 + 0.1, y_coords[5]),
+                arrowprops=dict(arrowstyle='-|> ', color=IEEE_LTGRAY,
+                                lw=1.0, connectionstyle="arc3,rad=-0.4",
+                                mutation_scale=10))
+    ax.text(center_x + bw/2 + 1.2, (y_coords[2] + y_coords[5])/2,
+            "Iterative\nRefinement", ha='center', fontsize=8, color=IEEE_GRAY)
+
+    # --- Fitness Objectives Side-Box ---
+    obj_x, obj_y = center_x - 4.5, y_coords[4]
+    ax.add_patch(mpatches.FancyBboxPatch((obj_x, obj_y-0.7), 2.2, 1.4,
+                                         boxstyle="round,pad=0.1",
+                                         fc='#FFF8E1', ec=IEEE_ORANGE, lw=0.8))
+    ax.text(obj_x + 1.1, obj_y + 0.4, "Fitness Objectives",
+            ha='center', fontsize=8, fontweight='bold', color=IEEE_ORANGE)
+    ax.text(obj_x + 1.1, obj_y - 0.2, "↑ Maximize Score\n↓ Minimize DP Cells",
+            ha='center', fontsize=7.5, color=IEEE_DKGRAY)
+
+    # --- Connection to SW Matrix logic ---
+    sw_x, sw_y = center_x + 2.8, y_coords[4]
+    ax.add_patch(mpatches.Circle((sw_x, sw_y), 0.6, fc='#E1F5FE', ec=IEEE_BLUE, lw=1.0))
+    ax.text(sw_x, sw_y, "SW\nMatrix", ha='center', va='center',
+            fontsize=8, fontweight='bold', color=IEEE_BLUE)
+    # Connector between Fitness and SW
+    ax.annotate('', xy=(sw_x - 0.65, sw_y), xytext=(center_x + bw/2 + 0.05, y_coords[4]),
+                arrowprops=dict(arrowstyle='<->', color=IEEE_BLUE, lw=1.0))
+
+    # --- Header ---
+    ax.text(center_x, 13.6, "STARFISH OPTIMIZATION ALGORITHM (SFOA) FLOW",
+            ha='center', fontsize=12, fontweight='bold', color=IEEE_BLUE)
+
+    fig.text(0.5, 0.05,
+             "Fig. 4. SFOA optimization flow for adaptive band search. The process iterates through exploration\n"
+             "and exploitation phases to maximize alignment fitness and minimize computational overhead.",
+             ha='center', fontsize=10, color=IEEE_DKGRAY, fontstyle='italic')
+
+    save(fig, 'fig4_sfoa_optimization.png')
+
+
+
+# ═══════════════════════════════════════════
+# FIGURE 5 — Comparative Methodology
+# ═══════════════════════════════════════════
+def figure5_comparative():
+    print("[Fig 5] Comparative Methodology …")
+    fig, axes = plt.subplots(1, 4, figsize=(14, 4.5))
+
+    n = 15
+    titles = [
+        "(a) Traditional SW",
+        "(b) Banded SW",
+        "(c) Adaptive SW",
+        "(d) Proposed (PF+SFOA)",
+    ]
+    bands = [None, 3, 5, 4]  # None = full, then fixed, adaptive, optimized
+    colors_active = ['#E3F2FD', '#B3E5FC', '#80DEEA', '#80CBC4']
+    colors_edge   = [IEEE_LTGRAY, IEEE_BLUE, IEEE_CYAN, '#00695C']
+
+    for idx, ax in enumerate(axes):
+        b = bands[idx]
+        active_count = 0
+        total_count = (n+1)**2
+
+        for i in range(n+1):
+            for j in range(n+1):
+                if b is None:
+                    active = True
+                else:
+                    active = abs(i - j) <= b
+                if active:
+                    active_count += 1
+                    rect = plt.Rectangle((j, n-i), 1, 1, lw=0.3,
+                                         ec=colors_edge[idx],
+                                         fc=colors_active[idx], zorder=2)
+                else:
+                    rect = plt.Rectangle((j, n-i), 1, 1, lw=0.2,
+                                         ec='#E0E0E0', fc='#FAFAFA',
+                                         alpha=0.4, zorder=1)
+                ax.add_patch(rect)
+
+        ax.set_xlim(0, n+1)
+        ax.set_ylim(0, n+1)
+        ax.set_aspect('equal')
+        ax.set_title(titles[idx], fontsize=9, fontweight='bold', color=IEEE_BLUE, pad=8)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        pct = active_count / total_count * 100
+        ax.text(n/2+0.5, -0.8, f"Cells: {pct:.0f}%",
+                ha='center', fontsize=8, fontweight='bold', color=IEEE_DKGRAY)
+
+        if idx == 0:
+            ax.text(n/2+0.5, -1.8, r"$\mathcal{O}(n \times m)$",
+                    ha='center', fontsize=9, color=IEEE_RED)
+        elif idx >= 1:
+            ax.text(n/2+0.5, -1.8, r"$\mathcal{O}(n \times b)$",
+                    ha='center', fontsize=9, color=IEEE_CYAN)
+
+    fig.suptitle("Comparative Methodology — Matrix Computation Reduction",
+                 fontsize=13, fontweight='bold', color=IEEE_BLUE, y=1.02)
+
+    fig.text(0.5, -0.08,
+             "Fig. 5. Side-by-side comparison of DP matrix utilization across methods.\n"
+             "(d) Proposed framework achieves optimized band width via SFOA + Pufferfish indexing.",
+             ha='center', fontsize=9, color=IEEE_DKGRAY, fontstyle='italic')
+
+    plt.tight_layout()
+    save(fig, 'fig5_comparative_methodology.png')
+
+
+# ═══════════════════════════════════════════
+# Run Figures 1-5
+# ═══════════════════════════════════════════
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Generating IEEE Figures (Part 1: Figures 1–5)")
+    print("=" * 60)
+    figure1_architecture()
+    figure2_traditional_sw()
+    figure3_adaptive_banding()
+    figure4_sfoa()
+    figure5_comparative()
+    print("\n[DONE] Figures 1-5 complete. Now run generate_ieee_figures_part2.py")
+
